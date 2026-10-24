@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#16231a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Maze Finder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+/* Layout: full-bleed map canvas; one floating status pill on top, a thumb-reach control bar on the bottom. */
+:root{
+  --field:#16231a;      /* chrome background, deep stalk green */
+  --field-2:#223326;
+  --husk:#f2c94c;       /* accent, ripe corn */
+  --ink:#f4f1e4;        /* text on chrome */
+  --muted:#a9b8a4;
+  --gps:#2f8cff;        /* the "you are here" blue everyone recognizes */
+  --trail:#ff5a36;
+  --bad:#ff7b6b;
+  --ok:#7fdc8a;
+  --ground:#0e1611;     /* behind the map */
+  --display:"Bricolage Grotesque",ui-rounded,system-ui,sans-serif;
+  --body:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--ground);color:var(--ink);font:16px/1.35 var(--body);overscroll-behavior:none}
+[hidden]{display:none!important}
+canvas#map{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+button{font:inherit;color:inherit;border:0;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--husk);outline-offset:2px}
+
+.status{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));display:flex;gap:8px;flex-wrap:wrap;pointer-events:none}
+.pill{pointer-events:auto;background:color-mix(in srgb,var(--field) 88%,transparent);backdrop-filter:blur(6px);border-radius:999px;padding:7px 12px;font-size:14px;display:flex;align-items:center;gap:7px;font-variant-numeric:tabular-nums;box-shadow:0 2px 10px #0006}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--husk)}.dot.bad{background:var(--bad)}
+.brand{font-family:var(--display);font-weight:800;letter-spacing:.01em;color:var(--husk)}
+
+.bar{position:fixed;left:0;right:0;bottom:0;padding:10px max(12px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 12px) max(12px,env(safe-area-inset-left,0px));display:flex;gap:10px;justify-content:space-between;align-items:flex-end;pointer-events:none}
+.bar > *{pointer-events:auto}
+.fab{width:60px;height:60px;border-radius:50%;background:var(--field);display:grid;place-items:center;box-shadow:0 3px 14px #0008;flex:none}
+.fab svg{width:28px;height:28px}
+.fab.on{background:var(--gps);color:#fff}
+.fab.small{width:52px;height:52px}
+.stack{display:flex;flex-direction:column;gap:10px;align-items:center}
+.big{height:60px;padding:0 22px;border-radius:30px;background:var(--husk);color:#1d1a08;font-family:var(--display);font-weight:800;font-size:18px;box-shadow:0 3px 14px #0008}
+
+.sheet{position:fixed;left:0;right:0;bottom:0;background:var(--field);border-radius:20px 20px 0 0;padding:16px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 16px) max(16px,env(safe-area-inset-left,0px));box-shadow:0 -6px 24px #0009;max-height:62vh;overflow:auto;display:flex;flex-direction:column;gap:12px}
+.sheet h2{margin:0;font-family:var(--display);font-weight:800;font-size:21px;text-wrap:balance}
+.sheet p{margin:0;color:var(--muted);font-size:15px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.btn{min-height:52px;padding:0 18px;border-radius:14px;background:var(--field-2);font-weight:700;flex:1 1 auto}
+.btn.primary{background:var(--husk);color:#1d1a08}
+.btn.danger{color:var(--bad)}
+.btn:disabled{opacity:.45}
+.pts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.pts li{display:flex;align-items:center;gap:10px;background:var(--field-2);border-radius:12px;padding:8px 8px 8px 12px;font-variant-numeric:tabular-nums;font-size:14px}
+.pts .n{width:26px;height:26px;border-radius:50%;background:var(--husk);color:#1d1a08;display:grid;place-items:center;font-weight:700;flex:none}
+.pts .t{flex:1;min-width:0}
+.pts .x{width:40px;height:40px;border-radius:10px;background:transparent;color:var(--bad);font-size:20px}
+.fit{font-size:14px;color:var(--muted)}
+.fit b{color:var(--ink)}
+input[type=text]{width:100%;min-height:50px;border-radius:12px;border:1px solid #3c5040;background:var(--ground);color:var(--ink);padding:0 14px;font:16px var(--body)}
+.menu .btn{text-align:left}
+.cross{position:fixed;left:50%;top:50%;width:64px;height:64px;margin:-32px 0 0 -32px;pointer-events:none}
+.toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 58px);transform:translateX(-50%);background:var(--husk);color:#1d1a08;font-weight:700;padding:9px 16px;border-radius:12px;box-shadow:0 3px 14px #0008;max-width:calc(100% - 32px);text-align:center}
+@media (prefers-reduced-motion:no-preference){.sheet{animation:up .18s ease-out}@keyframes up{from{transform:translateY(30px);opacity:.6}}}
+</style>
+</head>
+<body>
+<canvas id="map" aria-label="Maze map with your location"></canvas>
+
+<svg class="cross" id="cross" viewBox="0 0 64 64" hidden aria-hidden="true">
+  <circle cx="32" cy="32" r="13" fill="none" stroke="#000" stroke-width="5"/>
+  <circle cx="32" cy="32" r="13" fill="none" stroke="#f2c94c" stroke-width="3"/>
+  <path d="M32 0v19M32 45v19M0 32h19M45 32h19" stroke="#000" stroke-width="5"/>
+  <path d="M32 0v19M32 45v19M0 32h19M45 32h19" stroke="#f2c94c" stroke-width="3"/>
+  <circle cx="32" cy="32" r="2.5" fill="#f2c94c"/>
+</svg>
+
+<div class="status">
+  <div class="pill"><span class="brand">Maze Finder</span></div>
+  <div class="pill" id="gpsPill"><span class="dot" id="gpsDot"></span><span id="gpsText">GPS off</span></div>
+  <div class="pill" id="calPill"><span id="calText">Not lined up yet</span></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<!-- Main controls -->
+<div class="bar" id="mainBar">
+  <div class="stack">
+    <button class="fab small" id="menuBtn" aria-label="More options">
+      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg>
+    </button>
+    <button class="fab small" id="trailBtn" aria-label="Show my trail" aria-pressed="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 20c3 0 3-5 6-5s2 4 5 4 2-7 5-9" stroke-dasharray="2 3.5"/><circle cx="20" cy="5" r="2" fill="currentColor"/></svg>
+    </button>
+  </div>
+  <button class="big" id="calBtn">Line up map</button>
+  <div class="stack">
+    <button class="fab small" id="compassBtn" aria-label="Turn map to face where I'm walking" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 5l3 8h-6z" fill="currentColor"/></svg>
+    </button>
+    <button class="fab" id="followBtn" aria-label="Keep me centered" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="4" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Calibration sheet -->
+<div class="sheet" id="calSheet" hidden>
+  <h2>Line up the map</h2>
+  <p id="calHelp">Drag the map so the crosshair sits on a spot you can name, like the entrance or a numbered checkpoint. Then tell the app where that spot is.</p>
+  <div class="row">
+    <button class="btn primary" id="markGps">I'm standing here</button>
+    <button class="btn" id="markTypeBtn">Type coordinates</button>
+  </div>
+  <div id="typeRow" hidden class="row">
+    <input type="text" id="coordIn" inputmode="decimal" placeholder="41.8786, -87.6359 or a Google Maps link" autocomplete="off">
+    <button class="btn primary" id="coordOk">Add point</button>
+  </div>
+  <ul class="pts" id="ptList"></ul>
+  <div class="fit" id="fitText"></div>
+  <div class="row"><button class="btn" id="calDone">Done</button></div>
+</div>
+
+<!-- Menu sheet -->
+<div class="sheet menu" id="menuSheet" hidden>
+  <h2>Options</h2>
+  <div class="row"><button class="btn" id="loadBtn">Use a different map photo</button></div>
+  <div class="row"><button class="btn" id="nudgeBtn">Fix drift: I'm at the crosshair</button></div>
+  <div class="row"><button class="btn" id="northBtn">Turn map so north is up</button></div>
+  <div class="row"><button class="btn danger" id="clearTrail">Clear my trail</button></div>
+  <div class="row"><button class="btn danger" id="resetCal">Remove all lineup points</button></div>
+  <div class="row"><button class="btn" id="menuClose">Close</button></div>
+</div>
+<input type="file" id="fileIn" accept="image/*" hidden>
+
+<script>
+"use strict";
+// ---- Baked-in map (filled in once the maze photo arrives) ----
+const DEFAULT_MAP = null;      // data: URL of the maze photo
+const DEFAULT_POINTS = [];     // [{lat,lon,px,py}] lineup points for that photo
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem("mf."+k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem("mf."+k, JSON.stringify(v)); return true; }catch(e){ return false; } }
+};
+
+// ---------- state ----------
+const cv = $("map"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+let img = null, imgIsSample = false;
+let view = {s:1, r:0, tx:0, ty:0};          // screen = R(r)*s*p + t
+let points = store.get("points", null) ?? DEFAULT_POINTS.slice();
+let trail = store.get("trail", []);          // [[lat,lon],...]
+let showTrail = store.get("showTrail", true);
+let fix = null;                              // latest {lat,lon,acc,heading,speed,t}
+let recent = [];                             // samples for averaging
+let follow = false, headingUp = false;
+let compass = null;                          // degrees from north, device
+let lastHeading = null;
+let xf = null;                               // fitted transform
+let calibrating = false;
+
+// ---------- geometry ----------
+const R_EARTH_LAT = 110540, R_EARTH_LON = 111320;
+function origin(){ return points.length ? points[0] : (fix || {lat:0, lon:0}); }
+function toMeters(lat, lon, o){ return [(lon - o.lon) * Math.cos(o.lat*Math.PI/180) * R_EARTH_LON, (lat - o.lat) * R_EARTH_LAT]; }
+
+// Fit meters(east,north) -> image pixels. 2 points: rotate+scale+shift. 3+: full affine (handles a photo taken at an angle).
+function fit(){
+  xf = null;
+  if (points.length < 2) return;
+  const o = points[0];
+  const P = points.map(p => { const [x,y] = toMeters(p.lat, p.lon, o); return {x, y, u:p.px, v:p.py}; });
+  const sim = fitSimilarity(P);
+  let best = sim;
+  if (P.length >= 3){ const aff = fitAffine(P); if (aff) best = aff; }
+  if (!best) return;
+  best.o = {lat:o.lat, lon:o.lon};
+  // meters per pixel (for accuracy rings) and residuals
+  best.ppm = Math.sqrt(Math.abs(best.a*best.e - best.b*best.d));
+  best.err = P.map(p => { const [u,v] = apply(best, p.x, p.y); return Math.hypot(u-p.u, v-p.v) / best.ppm; });
+  xf = best;
+}
+function apply(t, x, y){ return [t.a*x + t.b*y + t.c, t.d*x + t.e*y + t.f]; }
+function fitSimilarity(P){
+  // complex form with z = x - i y (image y points down): w = A z + B
+  const n = P.length; let zx=0,zy=0,wx=0,wy=0;
+  for (const p of P){ zx+=p.x; zy+=-p.y; wx+=p.u; wy+=p.v; }
+  zx/=n; zy/=n; wx/=n; wy/=n;
+  let nr=0, ni=0, den=0;
+  for (const p of P){
+    const ar=p.x-zx, ai=-p.y-zy, br=p.u-wx, bi=p.v-wy;
+    nr += br*ar + bi*ai; ni += bi*ar - br*ai; den += ar*ar + ai*ai;
+  }
+  if (den < 1) return null;                       // points closer than ~1 m apart
+  const Ar = nr/den, Ai = ni/den;
+  // w = (Ar + i Ai)(x - i y) => u = Ar x + Ai y, v = Ai x - Ar y
+  return {a:Ar, b:Ai, c:wx - (Ar*zx - Ai*zy), d:Ai, e:-Ar, f:wy - (Ai*zx + Ar*zy), kind:"sim"};
+}
+function fitAffine(P){
+  let S=[[0,0,0],[0,0,0],[0,0,0]], bu=[0,0,0], bv=[0,0,0];
+  for (const p of P){
+    const r=[p.x,p.y,1];
+    for (let i=0;i<3;i++){ for (let j=0;j<3;j++) S[i][j]+=r[i]*r[j]; bu[i]+=r[i]*p.u; bv[i]+=r[i]*p.v; }
+  }
+  const det = det3(S);
+  // reject near-collinear sets: compare to spread of points
+  const spread = S[0][0]*S[1][1] - S[0][1]*S[0][1];
+  if (!isFinite(det) || Math.abs(det) < 1e-6 || Math.abs(det) < 1e-3*Math.abs(spread)*P.length*0.05) return null;
+  const sol1 = solve3(S, bu), sol2 = solve3(S, bv);
+  const t = {a:sol1[0], b:sol1[1], c:sol1[2], d:sol2[0], e:sol2[1], f:sol2[2], kind:"aff"};
+  // guard against a wildly skewed result from a sloppy third point
+  const s1 = Math.hypot(t.a,t.d), s2 = Math.hypot(t.b,t.e);
+  if (s1/s2 > 3 || s2/s1 > 3) return null;
+  return t;
+}
+function det3(m){ return m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1]) - m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0]) + m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]); }
+function solve3(m, b){
+  const d = det3(m), out=[];
+  for (let k=0;k<3;k++){ const mk = m.map((row,i)=>row.map((v,j)=> j===k ? b[i] : v)); out.push(det3(mk)/d); }
+  return out;
+}
+function geoToImg(lat, lon){ if (!xf) return null; const [x,y] = toMeters(lat, lon, xf.o); return apply(xf, x, y); }
+// direction of true north on the image, as an angle in image space
+function northAngleImg(){ if (!xf) return -Math.PI/2; return Math.atan2(xf.e, xf.b); }
+
+function imgToScreen(px, py){ const c=Math.cos(view.r), s=Math.sin(view.r); return [view.tx + view.s*(c*px - s*py), view.ty + view.s*(s*px + c*py)]; }
+function screenToImg(x, y){ const dx=(x-view.tx)/view.s, dy=(y-view.ty)/view.s, c=Math.cos(-view.r), s=Math.sin(-view.r); return [c*dx - s*dy, s*dx + c*dy]; }
+function zoomRotateAt(qx, qy, k, dr){
+  const c=Math.cos(dr), s=Math.sin(dr), dx=view.tx-qx, dy=view.ty-qy;
+  view.tx = qx + k*(c*dx - s*dy); view.ty = qy + k*(s*dx + c*dy);
+  view.s *= k; view.r += dr;
+}
+function centerOn(px, py){ const [sx,sy] = imgToScreen(px, py); view.tx += W/2 - sx; view.ty += mapCenterY() - sy; }
+function mapCenterY(){ return H/2; }
+function fitImage(){
+  if (!img) return;
+  view.r = 0; view.s = Math.min(W/img.width, H/img.height) * 0.92;
+  view.tx = (W - img.width*view.s)/2; view.ty = (H - img.height*view.s)/2;
+}
+
+// ---------- drawing ----------
+let dirty = true;
+function requestDraw(){ dirty = true; }
+function frame(){
+  if (dirty){ dirty = false; draw(); }
+  requestAnimationFrame(frame);
+}
+function draw(){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.fillStyle = "#0e1611"; ctx.fillRect(0,0,W,H);
+  if (!img) return;
+  ctx.save();
+  ctx.translate(view.tx, view.ty); ctx.rotate(view.r); ctx.scale(view.s, view.s);
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+
+  if (imgIsSample){
+    ctx.fillStyle = "#16231acc"; const t = "Sample maze. Load your photo from the ⋯ menu.";
+    ctx.font = "700 14px system-ui"; const w = ctx.measureText(t).width + 24;
+    ctx.fillRect((W-w)/2, H*0.16, w, 34); ctx.fillStyle = "#f2c94c"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(t, W/2, H*0.16+17);
+  }
+
+  // lineup points
+  points.forEach((p, i) => {
+    const [x,y] = imgToScreen(p.px, p.py);
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, 7); ctx.fillStyle="#f2c94c"; ctx.fill(); ctx.lineWidth=2.5; ctx.strokeStyle="#1d1a08"; ctx.stroke();
+    ctx.fillStyle="#1d1a08"; ctx.font="700 13px system-ui"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(String(i+1), x, y+0.5);
+  });
+
+  if (!xf) return;
+
+  // trail
+  if (showTrail && trail.length > 1){
+    ctx.beginPath();
+    trail.forEach(([la,lo], i) => { const q = geoToImg(la, lo); const [x,y] = imgToScreen(q[0], q[1]); i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); });
+    ctx.lineJoin="round"; ctx.lineCap="round";
+    ctx.strokeStyle="#000a"; ctx.lineWidth=7; ctx.stroke();
+    ctx.strokeStyle="#ff5a36"; ctx.lineWidth=4; ctx.setLineDash([2,7]); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // north arrow
+  const na = northAngleImg() + view.r;
+  drawNorth(W - 34 - safeRight(), safeTop() + 92, na);
+
+  // you
+  if (fix){
+    const q = geoToImg(fix.lat, fix.lon); const [x,y] = imgToScreen(q[0], q[1]);
+    const rpx = fix.acc * xf.ppm * view.s;
+    ctx.beginPath(); ctx.arc(x, y, Math.max(rpx, 12), 0, 7); ctx.fillStyle="#2f8cff2e"; ctx.fill(); ctx.strokeStyle="#2f8cff88"; ctx.lineWidth=1.5; ctx.stroke();
+    const hd = currentHeading();
+    if (hd != null){
+      const a = na + hd*Math.PI/180;      // heading measured clockwise from north
+      ctx.save(); ctx.translate(x, y); ctx.rotate(a + Math.PI/2);
+      const g = ctx.createRadialGradient(0,0,4,0,0,48); g.addColorStop(0,"#2f8cffcc"); g.addColorStop(1,"#2f8cff00");
+      ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,48,-Math.PI/2-0.45,-Math.PI/2+0.45); ctx.closePath(); ctx.fillStyle=g; ctx.fill();
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fillStyle="#fff"; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 7, 0, 7); ctx.fillStyle="#2f8cff"; ctx.fill();
+  }
+}
+function drawNorth(x, y, a){
+  ctx.save(); ctx.translate(x, y);
+  ctx.beginPath(); ctx.arc(0,0,20,0,7); ctx.fillStyle="#16231ae0"; ctx.fill();
+  ctx.rotate(a + Math.PI/2);
+  ctx.beginPath(); ctx.moveTo(0,-14); ctx.lineTo(7,4); ctx.lineTo(0,0); ctx.lineTo(-7,4); ctx.closePath(); ctx.fillStyle="#ff5a36"; ctx.fill();
+  ctx.rotate(-(a + Math.PI/2));
+  ctx.fillStyle="#f4f1e4"; ctx.font="700 10px system-ui"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  const lx = Math.cos(a)*30, ly = Math.sin(a)*30; ctx.fillText("N", lx, ly);
+  ctx.restore();
+}
+function safeTop(){ return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sat")) || 0; }
+function safeRight(){ return 0; }
+function currentHeading(){
+  if (compass != null) return compass;
+  if (fix && fix.heading != null && !isNaN(fix.heading) && (fix.speed ?? 0) > 0.6) lastHeading = fix.heading;
+  return lastHeading;
+}
+
+// ---------- gestures ----------
+const ptrs = new Map(); let g0 = null; let moved = 0;
+cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY}); g0 = gestureState(); moved = 0; });
+cv.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  const g = gestureState(); if (!g0 || g.n !== g0.n){ g0 = g; return; }
+  moved += Math.hypot(g.cx-g0.cx, g.cy-g0.cy);
+  if (moved > 6 && follow && !calibrating) setFollow(false);
+  view.tx += g.cx - g0.cx; view.ty += g.cy - g0.cy;
+  if (g.n >= 2){
+    const k = g.d / g0.d;
+    let dr = g.a - g0.a; if (dr > Math.PI) dr -= 2*Math.PI; if (dr < -Math.PI) dr += 2*Math.PI;
+    if (headingUp) dr = 0;
+    zoomRotateAt(g.cx, g.cy, k, dr);
+  }
+  g0 = g; requestDraw();
+});
+["pointerup","pointercancel"].forEach(t => cv.addEventListener(t, e => { ptrs.delete(e.pointerId); g0 = gestureState(); }));
+cv.addEventListener("wheel", e => { e.preventDefault(); zoomRotateAt(e.clientX, e.clientY, Math.exp(-e.deltaY*0.0015), 0); requestDraw(); }, {passive:false});
+function gestureState(){
+  const a = [...ptrs.values()]; if (!a.length) return null;
+  const cx = a.reduce((s,p)=>s+p.x,0)/a.length, cy = a.reduce((s,p)=>s+p.y,0)/a.length;
+  if (a.length < 2) return {n:1, cx, cy};
+  return {n:2, cx, cy, d:Math.max(10, Math.hypot(a[1].x-a[0].x, a[1].y-a[0].y)), a:Math.atan2(a[1].y-a[0].y, a[1].x-a[0].x)};
+}
+
+// ---------- GPS ----------
+let watchId = null;
+function startGps(){
+  if (!("geolocation" in navigator)){ setGps("bad","No GPS in this browser"); return; }
+  if (watchId != null) return;
+  setGps("warn","Finding you…");
+  watchId = navigator.geolocation.watchPosition(onPos, err => {
+    setGps("bad", err.code === 1 ? "Location blocked. Allow it in settings." : "No GPS signal yet");
+  }, {enableHighAccuracy:true, maximumAge:0, timeout:20000});
+}
+function onPos(p){
+  const c = p.coords;
+  fix = {lat:c.latitude, lon:c.longitude, acc:c.accuracy, heading:c.heading, speed:c.speed, t:p.timestamp};
+  recent.push(fix); const cut = Date.now() - 12000; recent = recent.filter(r => r.t >= cut);
+  setGps(c.accuracy <= 6 ? "ok" : c.accuracy <= 15 ? "warn" : "bad", "±" + Math.round(c.accuracy) + " m");
+  addTrail(fix);
+  if (follow && xf) followMe();
+  requestDraw();
+}
+function setGps(state, text){ $("gpsDot").className = "dot " + state; $("gpsText").textContent = text; }
+function addTrail(f){
+  if (f.acc > 25) return;
+  const last = trail[trail.length-1];
+  if (last){ const [x,y] = toMeters(f.lat, f.lon, {lat:last[0], lon:last[1]}); if (Math.hypot(x,y) < Math.max(2, f.acc*0.5)) return; }
+  trail.push([+f.lat.toFixed(7), +f.lon.toFixed(7)]);
+  if (trail.length > 6000) trail.splice(0, trail.length - 6000);
+  store.set("trail", trail);
+}
+function followMe(){
+  const q = geoToImg(fix.lat, fix.lon); if (!q) return;
+  if (headingUp){
+    const hd = currentHeading();
+    if (hd != null){ const target = -(northAngleImg() + hd*Math.PI/180) - Math.PI/2; const [sx,sy] = imgToScreen(q[0],q[1]); zoomRotateAt(sx, sy, 1, normAng(target - view.r)); }
+  }
+  centerOn(q[0], q[1]);
+}
+const normAng = a => { while (a > Math.PI) a -= 2*Math.PI; while (a < -Math.PI) a += 2*Math.PI; return a; };
+
+// average the last few seconds for a steadier lineup point
+function averagedFix(seconds){
+  const cut = Date.now() - seconds*1000;
+  let s = recent.filter(r => r.t >= cut); if (!s.length && fix) s = [fix];
+  if (!s.length) return null;
+  const best = Math.min(...s.map(r=>r.acc)); s = s.filter(r => r.acc <= Math.max(best*2, 8));
+  let wt=0, la=0, lo=0; for (const r of s){ const w = 1/(r.acc*r.acc); wt+=w; la+=r.lat*w; lo+=r.lon*w; }
+  return {lat:la/wt, lon:lo/wt, acc:best, n:s.length};
+}
+
+// ---------- compass ----------
+function onOrient(e){
+  let h = null;
+  if (typeof e.webkitCompassHeading === "number") h = e.webkitCompassHeading;
+  else if (e.absolute && e.alpha != null) h = (360 - e.alpha) % 360;
+  if (h == null) return;
+  const so = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+  compass = (h + so + 360) % 360;
+  if (follow && xf && fix) followMe();
+  requestDraw();
+}
+async function enableCompass(){
+  try{
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function"){
+      const r = await DeviceOrientationEvent.requestPermission(); if (r !== "granted") throw 0;
+    }
+    window.addEventListener("deviceorientationabsolute", onOrient);
+    window.addEventListener("deviceorientation", onOrient);
+    return true;
+  }catch(e){ return false; }
+}
+
+// ---------- UI ----------
+function toast(t, ms=2600){ const el=$("toast"); el.textContent=t; el.hidden=false; clearTimeout(toast.h); toast.h=setTimeout(()=>el.hidden=true, ms); }
+function setFollow(on){
+  follow = on; $("followBtn").classList.toggle("on", on); $("followBtn").setAttribute("aria-pressed", on);
+  if (on){ if (!xf){ toast("Line up the map first so I know where you are on it."); setFollow(false); return; } if (!fix){ toast("Waiting for GPS…"); } else followMe(); requestDraw(); }
+}
+$("followBtn").onclick = () => { startGps(); setFollow(!follow); };
+$("compassBtn").onclick = async () => {
+  if (!headingUp){
+    const ok = await enableCompass();
+    if (!ok) toast("No compass access. The map will turn using your walking direction instead.");
+    headingUp = true; startGps(); if (!follow && xf) setFollow(true);
+  } else {
+    headingUp = false;
+  }
+  $("compassBtn").classList.toggle("on", headingUp); $("compassBtn").setAttribute("aria-pressed", headingUp);
+  requestDraw();
+};
+$("trailBtn").onclick = () => { showTrail = !showTrail; store.set("showTrail", showTrail); $("trailBtn").classList.toggle("on", showTrail); $("trailBtn").setAttribute("aria-pressed", showTrail); requestDraw(); };
+$("trailBtn").classList.toggle("on", showTrail);
+
+$("menuBtn").onclick = () => { $("menuSheet").hidden = false; $("mainBar").hidden = true; };
+$("menuClose").onclick = closeMenu;
+function closeMenu(){ $("menuSheet").hidden = true; $("mainBar").hidden = false; }
+$("loadBtn").onclick = () => $("fileIn").click();
+$("clearTrail").onclick = () => { if ($("clearTrail").dataset.arm){ trail = []; store.set("trail", trail); delete $("clearTrail").dataset.arm; $("clearTrail").textContent = "Clear my trail"; toast("Trail cleared"); requestDraw(); closeMenu(); } else { $("clearTrail").dataset.arm = 1; $("clearTrail").textContent = "Tap again to clear trail"; } };
+$("resetCal").onclick = () => { if ($("resetCal").dataset.arm){ points = []; savePoints(); delete $("resetCal").dataset.arm; $("resetCal").textContent = "Remove all lineup points"; toast("Lineup points removed"); closeMenu(); } else { $("resetCal").dataset.arm = 1; $("resetCal").textContent = "Tap again to remove them"; } };
+$("northBtn").onclick = () => {
+  headingUp = false; $("compassBtn").classList.remove("on");
+  const target = -Math.PI/2 - northAngleImg();
+  zoomRotateAt(W/2, H/2, 1, normAng(target - view.r)); requestDraw(); closeMenu();
+};
+$("nudgeBtn").onclick = () => {
+  // shift the whole lineup so your current GPS position lands on the crosshair
+  if (!xf || !fix){ toast(xf ? "Waiting for GPS…" : "Line up the map first."); return; }
+  setFollow(false); closeMenu(); $("cross").hidden = false;
+  toast("Drag the map so the crosshair is where you really are, then tap the crosshair.", 4500);
+  $("nudgeBtn").dataset.wait = 1;
+};
+cv.addEventListener("pointerup", () => {
+  if (!$("nudgeBtn").dataset.wait || moved > 6) return;
+  const [cx, cy] = screenToImg(W/2, mapCenterY()); const q = geoToImg(fix.lat, fix.lon);
+  const du = cx - q[0], dv = cy - q[1];
+  points.forEach(p => { p.px += du; p.py += dv; }); savePoints();
+  delete $("nudgeBtn").dataset.wait; $("cross").hidden = true; toast("Fixed. Your dot moved to the crosshair.");
+});
+
+// calibration
+$("calBtn").onclick = () => { calibrating = true; setFollow(false); startGps(); $("calSheet").hidden = false; $("mainBar").hidden = true; $("cross").hidden = false; renderPts(); };
+$("calDone").onclick = () => { calibrating = false; $("calSheet").hidden = true; $("mainBar").hidden = false; $("cross").hidden = true; $("typeRow").hidden = true; if (xf && fix) setFollow(true); };
+$("markTypeBtn").onclick = () => { $("typeRow").hidden = !$("typeRow").hidden; if (!$("typeRow").hidden) $("coordIn").focus(); };
+$("coordOk").onclick = () => {
+  const c = parseCoords($("coordIn").value);
+  if (!c){ toast("I couldn't read that. Try something like 41.8786, -87.6359"); return; }
+  addPoint(c.lat, c.lon); $("coordIn").value = ""; $("typeRow").hidden = true;
+};
+$("markGps").onclick = () => {
+  if (!fix){ toast("Still finding you. Give the GPS a few seconds."); return; }
+  const b = $("markGps"); b.disabled = true; let n = 5;
+  const tick = () => {
+    if (n > 0){ b.textContent = "Hold still… " + n; n--; setTimeout(tick, 1000); return; }
+    const a = averagedFix(6); b.disabled = false; b.textContent = "I'm standing here";
+    if (!a){ toast("No GPS reading yet."); return; }
+    addPoint(a.lat, a.lon, a.acc);
+  };
+  tick();
+};
+function parseCoords(s){
+  const m = s.match(/@?(-?\d{1,2}\.\d+)\s*[, ]\s*(-?\d{1,3}\.\d+)/);
+  if (!m) return null; const lat = +m[1], lon = +m[2];
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null; return {lat, lon};
+}
+function addPoint(lat, lon, acc){
+  const [px, py] = screenToImg(W/2, mapCenterY());
+  points.push({lat:+lat.toFixed(7), lon:+lon.toFixed(7), px:Math.round(px*10)/10, py:Math.round(py*10)/10, acc: acc ? Math.round(acc) : null});
+  savePoints();
+  const msg = points.length === 1 ? "Point 1 saved. Now do a second spot far from this one." : points.length === 2 ? "Lined up! A third spot makes it more accurate." : "Point " + points.length + " saved.";
+  toast(msg, 3500);
+}
+function savePoints(){ store.set("points", points); fit(); renderPts(); updateCal(); requestDraw(); }
+function renderPts(){
+  const ul = $("ptList"); ul.textContent = "";
+  points.forEach((p, i) => {
+    const li = document.createElement("li");
+    const n = document.createElement("span"); n.className="n"; n.textContent = i+1;
+    const t = document.createElement("span"); t.className="t";
+    t.textContent = p.lat.toFixed(5) + ", " + p.lon.toFixed(5) + (p.acc ? "  ±" + p.acc + " m" : "") + (xf ? "  off by " + xf.err[i].toFixed(1) + " m" : "");
+    const x = document.createElement("button"); x.className="x"; x.textContent="✕"; x.setAttribute("aria-label","Remove point " + (i+1));
+    x.onclick = () => { points.splice(i,1); savePoints(); };
+    li.append(n, t, x); ul.append(li);
+  });
+  const ft = $("fitText");
+  if (points.length === 0) ft.textContent = "You need two spots, as far apart as you can. A third spot fixes a photo taken at an angle.";
+  else if (points.length === 1) ft.textContent = "One more spot needed.";
+  else if (!xf) ft.innerHTML = "Those spots are too close together. Pick one farther away.";
+  else {
+    const worst = Math.max(...xf.err);
+    ft.innerHTML = "Lined up using <b>" + points.length + " spots</b>" + (xf.kind === "aff" ? " (angle-corrected)" : "") +
+      (points.length > 2 ? ". Worst mismatch <b>" + worst.toFixed(1) + " m</b>" + (worst > 8 ? ". Remove that spot or redo it." : ".") : ".");
+  }
+}
+function updateCal(){
+  $("calText").textContent = xf ? "Map lined up · " + points.length + " spots" : points.length ? "1 of 2 spots marked" : "Not lined up yet";
+  $("calBtn").textContent = xf ? "Adjust lineup" : "Line up map";
+}
+
+// map image
+$("fileIn").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const url = await downscale(f, 2400);
+  loadImage(url, false, () => { const ok = store.set("map", url); points = []; savePoints(); fitImage(); requestDraw(); closeMenu();
+    toast(ok ? "Map loaded. Now line it up." : "Map loaded, but it's too big to remember after closing.", 3500); });
+};
+function downscale(file, max){
+  return new Promise(res => {
+    const u = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, max / Math.max(im.width, im.height));
+      const c = document.createElement("canvas"); c.width = Math.round(im.width*k); c.height = Math.round(im.height*k);
+      c.getContext("2d").drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(u); res(c.toDataURL("image/jpeg", 0.85));
+    };
+    im.src = u;
+  });
+}
+function loadImage(src, sample, cb){ const im = new Image(); im.onload = () => { img = im; imgIsSample = sample; cb && cb(); requestDraw(); }; im.src = src; }
+
+// a stand-in maze so the page isn't empty before the real photo is loaded
+function sampleMaze(){
+  const n = 15, cell = 40, c = document.createElement("canvas"); c.width = c.height = n*cell + 40;
+  const g = c.getContext("2d"); g.fillStyle = "#c9b458"; g.fillRect(0,0,c.width,c.height);
+  let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  const walls = []; for (let i=0;i<n*n;i++) walls.push([1,1,1,1]); const seen = new Array(n*n).fill(false);
+  const st = [0]; seen[0] = true;
+  while (st.length){
+    const k = st[st.length-1], x = k%n, y = (k/n)|0;
+    const nb = [[0,-1,0,2],[1,0,1,3],[0,1,2,0],[-1,0,3,1]].filter(([dx,dy]) => { const X=x+dx, Y=y+dy; return X>=0&&Y>=0&&X<n&&Y<n&&!seen[Y*n+X]; });
+    if (!nb.length){ st.pop(); continue; }
+    const [dx,dy,w,o] = nb[(rnd()*nb.length)|0], j = (y+dy)*n + x+dx;
+    walls[k][w] = 0; walls[j][o] = 0; seen[j] = true; st.push(j);
+  }
+  walls[0][3] = 0; walls[n*n-1][1] = 0;
+  g.fillStyle = "#e8dcb0";
+  for (let i=0;i<n*n;i++){ const x = 20 + (i%n)*cell, y = 20 + ((i/n)|0)*cell; g.fillRect(x+6, y+6, cell-12, cell-12);
+    if (!walls[i][1]) g.fillRect(x+cell-6, y+6, 12, cell-12); if (!walls[i][2]) g.fillRect(x+6, y+cell-6, cell-12, 12); }
+  g.fillRect(0, 26, 26, cell-12); g.fillRect(c.width-26, c.height-20-cell+6, 26, cell-12);
+  g.fillStyle = "#2a3a1f"; g.font = "bold 16px system-ui"; g.fillText("ENTER", 4, 18); g.fillText("EXIT", c.width-44, c.height-4);
+  return c.toDataURL("image/png");
+}
+
+// ---------- boot ----------
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 3); W = innerWidth; H = innerHeight;
+  cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR); requestDraw();
+}
+addEventListener("resize", () => { const cx = W/2, cy = H/2; resize(); view.tx += W/2 - cx; view.ty += H/2 - cy; });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") keepAwake(); });
+async function keepAwake(){ try{ if (navigator.wakeLock) await navigator.wakeLock.request("screen"); }catch(e){} }
+
+resize();
+const saved = store.get("map", null);
+const startSrc = saved || DEFAULT_MAP;
+if (!saved && store.get("points", null) == null) points = DEFAULT_POINTS.slice();
+loadImage(startSrc || sampleMaze(), !startSrc, () => { fitImage(); fit(); updateCal(); renderPts(); });
+startGps(); keepAwake(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
