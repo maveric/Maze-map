@@ -170,34 +170,72 @@ const R_EARTH_LAT = 110540, R_EARTH_LON = 111320;
 function origin(){ return points.length ? points[0] : (fix || {lat:0, lon:0}); }
 function toMeters(lat, lon, o){ return [(lon - o.lon) * Math.cos(o.lat*Math.PI/180) * R_EARTH_LON, (lat - o.lat) * R_EARTH_LAT]; }
 
-// Fit meters(east,north) -> image pixels. 2 points: rotate+scale+shift. 3+: full affine (handles a photo taken at an angle).
+// Fit meters(east,north) -> image pixels as a weighted least-squares fit over all lineup points.
+// Each point is weighted by how much we trust it (GPS accuracy, or ~4 m for typed coordinates),
+// and points that disagree with the rest are down-weighted automatically (Huber reweighting).
+// Rotate+scale+shift is used by default; a full affine fit (corrects a photo taken at an angle)
+// is used only with 4+ points and only when it fits clearly better.
 function fit(){
   xf = null;
   if (points.length < 2) return;
   const o = points[0];
-  const P = points.map(p => { const [x,y] = toMeters(p.lat, p.lon, o); return {x, y, u:p.px, v:p.py}; });
-  const sim = fitSimilarity(P);
-  let best = sim;
-  if (P.length >= 3){ const aff = fitAffine(P); if (aff) best = aff; }
+  const P = points.map(p => { const [x,y] = toMeters(p.lat, p.lon, o); const sd = Math.max(p.acc || 4, 3); return {x, y, u:p.px, v:p.py, w0:1/(sd*sd), w:1/(sd*sd)}; });
+  // with 4+ points, find spots that disagree with all the others: refit without each one and
+  // see how far off it lands. A clear misfit is set aside (kept on the list, nearly zero weight).
+  const outlier = P.map(() => false);
+  for (;;){
+    const active = P.map((p, i) => i).filter(i => !outlier[i]);
+    if (active.length < 4) break;
+    const loo = active.map(i => {
+      const rest = P.filter((p, j) => j !== i && !outlier[j]).map(p => ({...p, w:p.w0}));
+      const t = fitSimilarity(rest); if (!t) return 0;
+      const [u,v] = apply(t, P[i].x, P[i].y); return Math.hypot(u-P[i].u, v-P[i].v) / Math.sqrt(Math.abs(t.a*t.e - t.b*t.d));
+    });
+    let k = 0; loo.forEach((e, j) => { if (e > loo[k]) k = j; });
+    const others = loo.filter((e, j) => j !== k);
+    if (loo[k] > Math.max(12, 3 * median(others))) outlier[active[k]] = true; else break;
+  }
+  P.forEach((p, i) => { if (outlier[i]) p.w0 *= 0.001; });
+  let best = robust(P, fitSimilarity);
   if (!best) return;
+  if (P.length - outlier.filter(Boolean).length >= 4){
+    const aff = robust(P, fitAffine);
+    if (aff && aff.rms < best.rms * 0.75) best = aff;
+  }
   best.o = {lat:o.lat, lon:o.lon};
-  // meters per pixel (for accuracy rings) and residuals
-  best.ppm = Math.sqrt(Math.abs(best.a*best.e - best.b*best.d));
-  best.err = P.map(p => { const [u,v] = apply(best, p.x, p.y); return Math.hypot(u-p.u, v-p.v) / best.ppm; });
+  best.outlier = outlier;
   xf = best;
 }
+function robust(P, fitter){
+  P.forEach(p => p.w = p.w0);
+  let t = null;
+  for (let it = 0; it < 8; it++){
+    const nt = fitter(P); if (!nt) return t;
+    t = nt; t.ppm = Math.sqrt(Math.abs(t.a*t.e - t.b*t.d));
+    t.err = P.map(p => { const [u,v] = apply(t, p.x, p.y); return Math.hypot(u-p.u, v-p.v) / t.ppm; });
+    if (P.length < 3) break;
+    const k = Math.max(3, 1.5 * median(t.err));
+    P.forEach((p, i) => p.w = p.w0 * Math.min(1, k / Math.max(t.err[i], 1e-9)));
+  }
+  let sw = 0, se = 0; P.forEach((p, i) => { sw += p.w0; se += p.w0 * t.err[i] * t.err[i]; });
+  t.rms = Math.sqrt(se / sw);
+  t.wt = P.map(p => p.w / p.w0);
+  return t;
+}
+function median(a){ const b = [...a].sort((x,y)=>x-y), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m-1] + b[m]) / 2; }
 function apply(t, x, y){ return [t.a*x + t.b*y + t.c, t.d*x + t.e*y + t.f]; }
 function fitSimilarity(P){
-  // complex form with z = x - i y (image y points down): w = A z + B
-  const n = P.length; let zx=0,zy=0,wx=0,wy=0;
-  for (const p of P){ zx+=p.x; zy+=-p.y; wx+=p.u; wy+=p.v; }
-  zx/=n; zy/=n; wx/=n; wy/=n;
-  let nr=0, ni=0, den=0;
+  // complex form with z = x - i y (image y points down): w = A z + B, weighted
+  let W=0,zx=0,zy=0,wx=0,wy=0;
+  for (const p of P){ W+=p.w; zx+=p.w*p.x; zy+=-p.w*p.y; wx+=p.w*p.u; wy+=p.w*p.v; }
+  zx/=W; zy/=W; wx/=W; wy/=W;
+  let nr=0, ni=0, den=0, spread=0, sw=0;
   for (const p of P){
     const ar=p.x-zx, ai=-p.y-zy, br=p.u-wx, bi=p.v-wy;
-    nr += br*ar + bi*ai; ni += bi*ar - br*ai; den += ar*ar + ai*ai;
+    nr += p.w*(br*ar + bi*ai); ni += p.w*(bi*ar - br*ai); den += p.w*(ar*ar + ai*ai);
+    spread += ar*ar + ai*ai; sw++;
   }
-  if (den < 1) return null;                       // points closer than ~1 m apart
+  if (spread/sw < 1) return null;                 // points closer than ~1 m apart
   const Ar = nr/den, Ai = ni/den;
   // w = (Ar + i Ai)(x - i y) => u = Ar x + Ai y, v = Ai x - Ar y
   return {a:Ar, b:Ai, c:wx - (Ar*zx - Ai*zy), d:Ai, e:-Ar, f:wy - (Ai*zx + Ar*zy), kind:"sim"};
@@ -206,15 +244,16 @@ function fitAffine(P){
   let S=[[0,0,0],[0,0,0],[0,0,0]], bu=[0,0,0], bv=[0,0,0];
   for (const p of P){
     const r=[p.x,p.y,1];
-    for (let i=0;i<3;i++){ for (let j=0;j<3;j++) S[i][j]+=r[i]*r[j]; bu[i]+=r[i]*p.u; bv[i]+=r[i]*p.v; }
+    for (let i=0;i<3;i++){ for (let j=0;j<3;j++) S[i][j]+=p.w*r[i]*r[j]; bu[i]+=p.w*r[i]*p.u; bv[i]+=p.w*r[i]*p.v; }
   }
-  const det = det3(S);
-  // reject near-collinear sets: compare to spread of points
-  const spread = S[0][0]*S[1][1] - S[0][1]*S[0][1];
-  if (!isFinite(det) || Math.abs(det) < 1e-6 || Math.abs(det) < 1e-3*Math.abs(spread)*P.length*0.05) return null;
+  // reject near-collinear sets: the smaller spread direction must be at least ~5% of the larger
+  const W = S[2][2], mx = S[0][2]/W, my = S[1][2]/W;
+  const cxx = S[0][0]/W - mx*mx, cyy = S[1][1]/W - my*my, cxy = S[0][1]/W - mx*my;
+  const tr = cxx + cyy, dt = cxx*cyy - cxy*cxy, l1 = tr/2 + Math.sqrt(Math.max(0, tr*tr/4 - dt)), l2 = tr - l1;
+  if (!(l2 > 0) || l2 < 0.0025*l1) return null;
   const sol1 = solve3(S, bu), sol2 = solve3(S, bv);
   const t = {a:sol1[0], b:sol1[1], c:sol1[2], d:sol2[0], e:sol2[1], f:sol2[2], kind:"aff"};
-  // guard against a wildly skewed result from a sloppy third point
+  // guard against a wildly skewed result from a sloppy point
   const s1 = Math.hypot(t.a,t.d), s2 = Math.hypot(t.b,t.e);
   if (s1/s2 > 3 || s2/s1 > 3) return null;
   return t;
@@ -518,7 +557,8 @@ function renderPts(){
     const li = document.createElement("li");
     const n = document.createElement("span"); n.className="n"; n.textContent = i+1;
     const t = document.createElement("span"); t.className="t";
-    t.textContent = p.lat.toFixed(5) + ", " + p.lon.toFixed(5) + (p.acc ? "  ±" + p.acc + " m" : "") + (xf ? "  off by " + xf.err[i].toFixed(1) + " m" : "");
+    t.textContent = p.lat.toFixed(5) + ", " + p.lon.toFixed(5) + (p.acc ? "  ±" + p.acc + " m" : "") + (xf && points.length > 2 ? "  off by " + xf.err[i].toFixed(1) + " m" + (xf.outlier[i] ? ", mostly ignored" : "") : "");
+    if (xf && xf.outlier[i]) li.style.outline = "2px solid var(--bad)";
     const x = document.createElement("button"); x.className="x"; x.textContent="✕"; x.setAttribute("aria-label","Remove point " + (i+1));
     x.onclick = () => { points.splice(i,1); savePoints(); };
     li.append(n, t, x); ul.append(li);
@@ -528,9 +568,13 @@ function renderPts(){
   else if (points.length === 1) ft.textContent = "One more spot needed.";
   else if (!xf) ft.innerHTML = "Those spots are too close together. Pick one farther away.";
   else {
-    const worst = Math.max(...xf.err);
-    ft.innerHTML = "Lined up using <b>" + points.length + " spots</b>" + (xf.kind === "aff" ? " (angle-corrected)" : "") +
-      (points.length > 2 ? ". Worst mismatch <b>" + worst.toFixed(1) + " m</b>" + (worst > 8 ? ". Remove that spot or redo it." : ".") : ".");
+    const bad = xf.outlier.filter(Boolean).length;
+    ft.innerHTML = points.length === 2
+      ? "Lined up using <b>2 spots</b>. Add a third so I can check them against each other."
+      : "Lined up using <b>" + points.length + " spots</b>" + (xf.kind === "aff" ? ", angle-corrected" : "") +
+        ". Typical mismatch <b>" + xf.rms.toFixed(1) + " m</b>." +
+        (bad ? " " + bad + (bad > 1 ? " spots disagree" : " spot disagrees") + " with the rest and " + (bad > 1 ? "are" : "is") + " mostly ignored. Remove or redo " + (bad > 1 ? "them" : "it") + "." :
+         xf.rms > 6 ? " That's high. Redo the spot with the biggest mismatch, or add another spot." : "");
   }
 }
 function updateCal(){
